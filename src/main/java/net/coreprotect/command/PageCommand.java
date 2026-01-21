@@ -252,6 +252,15 @@ public class PageCommand {
             String bc = x + "." + y + "." + z + "." + wid + "." + timeStart + "." + timeEnd + "." + argNoisy + "." + argExcluded + "." + argRestricted + "." + argWid + "." + re;
             ConfigHandler.lookupCommand.put(player.getName(), bc);
 
+            String world = WorldUtils.getWorldName(wid);
+            Location location = null;
+            if (world != null) {
+                org.bukkit.World bukkitWorld = Bukkit.getServer().getWorld(world);
+                if (bukkitWorld != null) {
+                    location = new Location(bukkitWorld, x, y, z);
+                }
+            }
+
             List<String> rollbackusers = ConfigHandler.lookupUlist.get(player.getName());
             List<Object> argBlocks = ConfigHandler.lookupBlist.get(player.getName());
             Map<Object, Boolean> argExclude = ConfigHandler.lookupElist.get(player.getName());
@@ -260,7 +269,7 @@ public class PageCommand {
             Integer[] argRadius = ConfigHandler.lookupRadius.get(player.getName());
             String ts = ConfigHandler.lookupTime.get(player.getName());
 
-            Runnable runnable = new StandardLookupThread(player, command, rollbackusers, argBlocks, argExclude, argExcludeUsers, argAction, argRadius, null, x, y, z, wid, argWid, timeStart, timeEnd, argNoisy, argExcluded, argRestricted, page, re, type, ts, false);
+            Runnable runnable = new StandardLookupThread(player, command, rollbackusers, argBlocks, argExclude, argExcludeUsers, argAction, argRadius, location, x, y, z, wid, argWid, timeStart, timeEnd, argNoisy, argExcluded, argRestricted, page, re, type, ts, false);
             Thread thread = new Thread(runnable);
             thread.start();
         }
