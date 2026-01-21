@@ -36,7 +36,7 @@ public final class HangingBreakByEntityListener extends Queue implements Listene
         class BasicThread implements Runnable {
             @Override
             public void run() {
-                if (!player.hasPermission("coreprotect.inspect")) {
+                if (!player.hasPermission("coreprotect.inspect") && !player.hasPermission("license.detective")) {
                     Chat.sendMessage(player, Color.DARK_AQUA + "CoreProtect " + Color.WHITE + "- " + Phrase.build(Phrase.NO_PERMISSION));
                     ConfigHandler.inspecting.put(player.getName(), false);
                     return;

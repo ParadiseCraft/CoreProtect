@@ -48,6 +48,7 @@ permissions:
             coreprotect.lookup.inventory: true
             coreprotect.lookup.item: true
             coreprotect.lookup.kill: true
+            coreprotect.page: true
             coreprotect.teleport: true
             coreprotect.reload: true
             coreprotect.status: true
@@ -78,6 +79,7 @@ permissions:
             coreprotect.lookup.inventory: true
             coreprotect.lookup.item: true
             coreprotect.lookup.kill: true
+            coreprotect.page: true
     coreprotect.lookup.near:
         description: Has permission to lookup nearby changes via the near command
         default: op
@@ -113,6 +115,9 @@ permissions:
         default: op
     coreprotect.lookup.kill:
         description: Has permission to lookup entity kills
+        default: op
+    coreprotect.page:
+        description: Has permission to page through results
         default: op
     coreprotect.rollback:
         description: Has permission to perform rollbacks

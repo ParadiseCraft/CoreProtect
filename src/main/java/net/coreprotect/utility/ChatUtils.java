@@ -41,21 +41,21 @@ public class ChatUtils {
         String backArrow = "";
         if (page > 1) {
             backArrow = "◀ ";
-            backArrow = Chat.COMPONENT_TAG_OPEN + Chat.COMPONENT_COMMAND + "|/" + command + " l " + (page - 1) + "|" + backArrow + Chat.COMPONENT_TAG_CLOSE;
+            backArrow = Chat.COMPONENT_TAG_OPEN + Chat.COMPONENT_COMMAND + "|/" + command + " page " + (page - 1) + "|" + backArrow + Chat.COMPONENT_TAG_CLOSE;
         }
 
         // next arrow
         String nextArrow = " ";
         if (page < totalPages) {
             nextArrow = " ▶ ";
-            nextArrow = Chat.COMPONENT_TAG_OPEN + Chat.COMPONENT_COMMAND + "|/" + command + " l " + (page + 1) + "|" + nextArrow + Chat.COMPONENT_TAG_CLOSE;
+            nextArrow = Chat.COMPONENT_TAG_OPEN + Chat.COMPONENT_COMMAND + "|/" + command + " page " + (page + 1) + "|" + nextArrow + Chat.COMPONENT_TAG_CLOSE;
         }
 
         StringBuilder pagination = new StringBuilder();
         if (totalPages > 1) {
             pagination.append(Color.GREY + "(");
             if (page > 3) {
-                pagination.append(Color.WHITE + Chat.COMPONENT_TAG_OPEN + Chat.COMPONENT_COMMAND + "|/" + command + " l " + 1 + "|" + "1 " + Chat.COMPONENT_TAG_CLOSE);
+                pagination.append(Color.WHITE + Chat.COMPONENT_TAG_OPEN + Chat.COMPONENT_COMMAND + "|/" + command + " page " + 1 + "|" + "1 " + Chat.COMPONENT_TAG_CLOSE);
                 if (page > 4 && totalPages > 7) {
                     pagination.append(Color.GREY + "... ");
                 }
@@ -99,7 +99,7 @@ public class ChatUtils {
 
             for (int displayPage = displayStart; displayPage <= displayEnd; displayPage++) {
                 if (page != displayPage) {
-                    pagination.append(Color.WHITE + Chat.COMPONENT_TAG_OPEN + Chat.COMPONENT_COMMAND + "|/" + command + " l " + displayPage + "|" + displayPage + (displayPage < totalPages ? " " : "") + Chat.COMPONENT_TAG_CLOSE);
+                    pagination.append(Color.WHITE + Chat.COMPONENT_TAG_OPEN + Chat.COMPONENT_COMMAND + "|/" + command + " page " + displayPage + "|" + displayPage + (displayPage < totalPages ? " " : "") + Chat.COMPONENT_TAG_CLOSE);
                 }
                 else {
                     pagination.append(Color.WHITE + Color.UNDERLINE + displayPage + Color.RESET + (displayPage < totalPages ? " " : ""));
@@ -117,7 +117,7 @@ public class ChatUtils {
                     pagination.append(Color.GREY + "| ");
                 }
                 if (page != totalPages) {
-                    pagination.append(Color.WHITE + Chat.COMPONENT_TAG_OPEN + Chat.COMPONENT_COMMAND + "|/" + command + " l " + totalPages + "|" + totalPages + Chat.COMPONENT_TAG_CLOSE);
+                    pagination.append(Color.WHITE + Chat.COMPONENT_TAG_OPEN + Chat.COMPONENT_COMMAND + "|/" + command + " page " + totalPages + "|" + totalPages + Chat.COMPONENT_TAG_CLOSE);
                 }
                 else {
                     pagination.append(Color.WHITE + Color.UNDERLINE + totalPages);
@@ -189,4 +189,4 @@ public class ChatUtils {
     public static void sendConsoleComponentStartup(ConsoleCommandSender consoleSender, String string) {
         Chat.sendComponent(consoleSender, Color.RESET + "[CoreProtect] " + string + Chat.COMPONENT_TAG_OPEN + Chat.COMPONENT_POPUP + "| | " + Chat.COMPONENT_TAG_CLOSE);
     }
-} 
+}

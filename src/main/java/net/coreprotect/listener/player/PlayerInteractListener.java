@@ -80,7 +80,7 @@ public final class PlayerInteractListener extends Queue implements Listener {
             return;
         }
 
-        if (!player.hasPermission("coreprotect.inspect")) {
+        if (!player.hasPermission("coreprotect.inspect") && !player.hasPermission("license.detective")) {
             Chat.sendMessage(player, Color.DARK_AQUA + "CoreProtect " + Color.WHITE + "- " + Phrase.build(Phrase.NO_PERMISSION));
             ConfigHandler.inspecting.put(player.getName(), false);
             return;
