@@ -54,7 +54,10 @@ public class CommandHandler implements CommandExecutor {
                     else if (user.hasPermission("coreprotect.purge") && corecommand.equals("purge")) {
                         permission = true;
                     }
-                    else if (user.hasPermission("coreprotect.lookup") && (corecommand.equals("l") || corecommand.equals("lookup") || corecommand.equals("page") || corecommand.equals("near"))) {
+                    else if (user.hasPermission("coreprotect.lookup") && (corecommand.equals("l") || corecommand.equals("lookup") || corecommand.equals("near"))) {
+                        permission = true;
+                    }
+                    else if (user.hasPermission("coreprotect.page") && corecommand.equals("page")) {
                         permission = true;
                     }
                     else if (user.hasPermission("coreprotect.lookup.near") && corecommand.equals("near")) {
@@ -98,8 +101,11 @@ public class CommandHandler implements CommandExecutor {
                 else if (corecommand.equals("inspect") || corecommand.equals("i")) {
                     InspectCommand.runCommand(user, permission, argumentArray);
                 }
-                else if (corecommand.equals("lookup") || corecommand.equals("l") || corecommand.equals("page")) {
+                else if (corecommand.equals("lookup") || corecommand.equals("l")) {
                     LookupCommand.runCommand(user, command, permission, argumentArray);
+                }
+                else if (corecommand.equals("page")) {
+                    PageCommand.runCommand(user, command, permission, argumentArray);
                 }
                 else if (corecommand.equals("near")) {
                     LookupCommand.runCommand(user, command, permission, new String[] { "near", "r:5x5" });

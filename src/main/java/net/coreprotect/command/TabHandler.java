@@ -70,7 +70,7 @@ public class TabHandler implements TabCompleter {
         else if (args.length == 3 && argument0.equals("purge") && sender.hasPermission("coreprotect.purge")) {
             return handlePurgeThirdArgCompletions(args[1], args[2]);
         }
-        else if (hasLookupCommand(argument0, sender) && (!argument0.equals("l") && !argument0.equals("lookup") || !paramState.hasPage)) {
+        else if ((argument0.equals("page") && sender.hasPermission("coreprotect.page")) || hasLookupCommand(argument0, sender)) {
             return handleGenericLookupCompletions(argument0, currentArg, paramState);
         }
 
@@ -86,6 +86,7 @@ public class TabHandler implements TabCompleter {
         addCompletionIfPermitted(sender, "coreprotect.rollback", "rollback", completions);
         addCompletionIfPermitted(sender, "coreprotect.restore", "restore", completions);
         addCompletionIfPermitted(sender, "coreprotect.lookup", "lookup", completions);
+        addCompletionIfPermitted(sender, "coreprotect.page", "page", completions);
         addCompletionIfPermitted(sender, "coreprotect.purge", "purge", completions);
         addCompletionIfPermitted(sender, "coreprotect.reload", "reload", completions);
         addCompletionIfPermitted(sender, "coreprotect.status", "status", completions);
@@ -114,7 +115,7 @@ public class TabHandler implements TabCompleter {
     }
 
     private boolean hasPagePermission(CommandSender sender) {
-        return sender.hasPermission("coreprotect.lookup") || sender.hasPermission("coreprotect.lookup.near") || sender.hasPermission("coreprotect.inspect");
+        return sender.hasPermission("coreprotect.page") || sender.hasPermission("coreprotect.lookup.near") || sender.hasPermission("coreprotect.inspect");
     }
 
     private boolean hasLookupCommand(String cmd, CommandSender sender) {
@@ -490,10 +491,7 @@ public class TabHandler implements TabCompleter {
                 params.add(param);
             }
         }
-        if (firstParam && state.pageLookup && (lastArgument.equals("l") || lastArgument.equals("lookup"))) {
-            params.add("page:");
-        }
-        else if (!firstParam && argument.startsWith("#")) {
+        if (!firstParam && argument.startsWith("#")) {
             if (!state.hasCount) {
                 params.add("#count");
             }

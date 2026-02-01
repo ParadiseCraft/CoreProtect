@@ -18,7 +18,18 @@ public class ActionParser {
      */
     public static String[] parsePage(String[] argumentArray) {
         if (argumentArray.length == 2) {
-            argumentArray[1] = argumentArray[1].replaceFirst("page:", "");
+            String command = argumentArray[0].toLowerCase(Locale.ROOT);
+            String action = argumentArray[1].replaceFirst("page:", "");
+
+            if (command.equals("l") || command.equals("lookup")) {
+                try {
+                    Integer.parseInt(action);
+                    argumentArray[0] = "page";
+                }
+                catch (NumberFormatException ignored) { }
+            }
+
+            argumentArray[1] = action;
         }
 
         return argumentArray;
