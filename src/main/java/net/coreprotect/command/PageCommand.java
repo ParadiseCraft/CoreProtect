@@ -1,5 +1,6 @@
 package net.coreprotect.command;
 
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -13,9 +14,13 @@ import org.bukkit.command.ConsoleCommandSender;
 
 import net.coreprotect.command.lookup.BlockLookupThread;
 import net.coreprotect.command.lookup.ChestTransactionLookupThread;
+import net.coreprotect.command.lookup.EntityInteractionLookupThread;
 import net.coreprotect.command.lookup.StandardLookupThread;
 import net.coreprotect.config.ConfigHandler;
 import net.coreprotect.language.Phrase;
+import net.coreprotect.model.action.EntityActionFilter;
+import net.coreprotect.model.lookup.LookupOutputMode;
+import net.coreprotect.model.lookup.LookupRollbackState;
 import net.coreprotect.utility.Chat;
 import net.coreprotect.utility.ChatMessage;
 import net.coreprotect.utility.Color;
@@ -129,7 +134,7 @@ public class PageCommand {
             Thread thread = new Thread(runnable);
             thread.start();
         }
-        else if (type == 2 || type == 3 || type == 7 || type == 8) {
+        else if (type == 2 || type == 3 || type == 7 || type == 8 || type == 9) {
             boolean defaultRe = true;
             int page = 1;
             int re = 7;
@@ -168,6 +173,13 @@ public class PageCommand {
             }
             if (re > 100 && !(player instanceof ConsoleCommandSender)) {
                 re = 100;
+            }
+
+            if (type == 9) {
+                Runnable runnable = new EntityInteractionLookupThread(player, command, page, re);
+                Thread thread = new Thread(runnable);
+                thread.start();
+                return;
             }
 
             String lcommand = ConfigHandler.lookupCommand.get(player.getName());
@@ -266,10 +278,14 @@ public class PageCommand {
             Map<Object, Boolean> argExclude = ConfigHandler.lookupElist.get(player.getName());
             List<String> argExcludeUsers = ConfigHandler.lookupEUserlist.get(player.getName());
             List<Integer> argAction = ConfigHandler.lookupAlist.get(player.getName());
+            EntityActionFilter argEntityActionFilter = ConfigHandler.lookupEntityActionFilter.getOrDefault(player.getName(), EntityActionFilter.DEFAULT);
+            List<String> argFilters = ConfigHandler.lookupFlist.getOrDefault(player.getName(), Collections.emptyList());
             Integer[] argRadius = ConfigHandler.lookupRadius.get(player.getName());
             String ts = ConfigHandler.lookupTime.get(player.getName());
+            LookupOutputMode outputMode = ConfigHandler.lookupOutputMode.getOrDefault(player.getName(), LookupOutputMode.DETAIL);
+            LookupRollbackState rollbackState = ConfigHandler.lookupRollbackState.getOrDefault(player.getName(), LookupRollbackState.ANY);
 
-            Runnable runnable = new StandardLookupThread(player, command, rollbackusers, argBlocks, argExclude, argExcludeUsers, argAction, argRadius, location, x, y, z, wid, argWid, timeStart, timeEnd, argNoisy, argExcluded, argRestricted, page, re, type, ts, false);
+            Runnable runnable = new StandardLookupThread(player, command, rollbackusers, argBlocks, argExclude, argExcludeUsers, argAction, argEntityActionFilter, argFilters, argRadius, location, x, y, z, wid, argWid, timeStart, timeEnd, argNoisy, argExcluded, argRestricted, page, re, type, ts, outputMode, rollbackState);
             Thread thread = new Thread(runnable);
             thread.start();
         }
