@@ -17,8 +17,6 @@ import org.duckdb.DuckDBConnection;
 
 import net.coreprotect.config.ConfigHandler;
 import net.coreprotect.database.statement.EntitySpawnStatement;
-import net.coreprotect.utility.ErrorReporter;
-import net.coreprotect.utility.serialize.EntityDataCodec;
 
 public final class RelationalConsumerWriteBatch implements ConsumerWriteBatch {
 
@@ -69,6 +67,7 @@ public final class RelationalConsumerWriteBatch implements ConsumerWriteBatch {
     private int duckDBBlockIdReservationSize = INITIAL_DUCKDB_BLOCK_ID_RESERVATION;
     private DuckDBSpatialIndex.Transaction duckDBSpatialIndex;
     private EntitySpawnStatement.Updates entitySpawnUpdates;
+    private boolean commitAttempted;
 
     public RelationalConsumerWriteBatch(Connection connection, DatabaseType databaseType) throws SQLException {
         this.connection = Objects.requireNonNull(connection, "connection");
@@ -78,6 +77,7 @@ public final class RelationalConsumerWriteBatch implements ConsumerWriteBatch {
 
     @Override
     public void begin() throws Exception {
+        commitAttempted = false;
         if (databaseType.isDuckDB()) {
             duckDBSpatialIndex = DuckDBSpatialIndex.begin(connection, ConfigHandler.prefix);
         }
@@ -86,6 +86,7 @@ public final class RelationalConsumerWriteBatch implements ConsumerWriteBatch {
 
     @Override
     public boolean commit() throws Exception {
+        commitAttempted = false;
         try {
             finishDuckDBBlockAppender();
             boolean acknowledgedRollback = Database.isRollbackOnlyTransactionAcknowledged();
@@ -99,7 +100,7 @@ public final class RelationalConsumerWriteBatch implements ConsumerWriteBatch {
                     duckDBSpatialIndex.flush(connection);
                 }
             }
-            boolean committed = Database.commitTransactionChecked(transactionStatement, databaseType);
+            boolean committed = Database.commitTransactionChecked(transactionStatement, databaseType, () -> commitAttempted = true);
             if (!committed) {
                 boolean rolledBack = Database.rollbackTransaction(transactionStatement, databaseType);
                 duckDBSpatialIndex = null;
@@ -112,11 +113,16 @@ public final class RelationalConsumerWriteBatch implements ConsumerWriteBatch {
             return true;
         }
         catch (Exception exception) {
+            Database.reportDatabaseFailure(exception);
             Database.rollbackTransaction(transactionStatement, databaseType);
             duckDBSpatialIndex = null;
-            ErrorReporter.report(exception);
             return false;
         }
+    }
+
+    @Override
+    public boolean wasCommitAttempted() {
+        return commitAttempted;
     }
 
     @Override
@@ -125,7 +131,7 @@ public final class RelationalConsumerWriteBatch implements ConsumerWriteBatch {
             finishDuckDBBlockAppender();
         }
         catch (Exception exception) {
-            ErrorReporter.report(exception);
+            Database.reportDatabaseFailure(exception);
         }
         Database.rollbackTransaction(transactionStatement, databaseType);
         duckDBSpatialIndex = null;
@@ -612,10 +618,10 @@ public final class RelationalConsumerWriteBatch implements ConsumerWriteBatch {
 
     private static void setDuckDBEntityData(PreparedStatement statement, int index, byte[] data) throws SQLException {
         if (data == null) {
-            statement.setNull(index, Types.VARCHAR);
+            statement.setNull(index, Types.BLOB);
         }
         else {
-            statement.setString(index, EntityDataCodec.toText(data));
+            statement.setBytes(index, data);
         }
     }
 

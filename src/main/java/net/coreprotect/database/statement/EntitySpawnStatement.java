@@ -36,7 +36,6 @@ import net.coreprotect.model.lookup.EntityLookupContext;
 import net.coreprotect.utility.ErrorReporter;
 import net.coreprotect.utility.EntitySpawnTracking;
 import net.coreprotect.utility.WorldUtils;
-import net.coreprotect.utility.serialize.EntityDataCodec;
 import net.coreprotect.utility.serialize.EntityDataCodec.Kind;
 
 public final class EntitySpawnStatement {
@@ -73,6 +72,16 @@ public final class EntitySpawnStatement {
 
     public static void addKillLink(ConsumerWriteBatch batch, String uuid, int killRowId) throws Exception {
         batch.linkEntitySpawnKill(UUID.fromString(uuid), killRowId);
+    }
+
+    public static Integer findRowIdByUuid(Connection connection, UUID uuid) throws SQLException {
+        String query = "SELECT rowid AS id FROM " + ConfigHandler.prefix + "entity_spawn WHERE uuid=? LIMIT 1";
+        try (PreparedStatement statement = connection.prepareStatement(query)) {
+            statement.setString(1, uuid.toString());
+            try (ResultSet resultSet = statement.executeQuery()) {
+                return resultSet.next() ? resultSet.getInt("id") : null;
+            }
+        }
     }
 
     public static Map<Integer, EntitySpawnRecord> loadRecords(Connection connection, Collection<Integer> rowIds) throws SQLException {
@@ -338,7 +347,7 @@ public final class EntitySpawnStatement {
         }
 
         String keyColumn = byRowId ? "rowid" : "uuid";
-        String query = "SELECT rowid AS id,uuid,wid,origin_x,origin_y,origin_z FROM " + ConfigHandler.prefix + "entity_spawn WHERE " + keyColumn + " IN(" + placeholders + ")";
+        String query = "SELECT rowid AS id,uuid,wid,origin_x,origin_y,origin_z,block_rowid FROM " + ConfigHandler.prefix + "entity_spawn WHERE " + keyColumn + " IN(" + placeholders + ")";
         try (PreparedStatement statement = connection.prepareStatement(query)) {
             for (int index = 0; index < ids.size(); index++) {
                 if (byRowId) {
@@ -352,7 +361,7 @@ public final class EntitySpawnStatement {
             List<EntitySpawnIdentity> identities = new ArrayList<>();
             try (ResultSet resultSet = statement.executeQuery()) {
                 while (resultSet.next()) {
-                    identities.add(new EntitySpawnIdentity(resultSet.getInt("id"), UUID.fromString(resultSet.getString("uuid")), resultSet.getInt("wid"), resultSet.getDouble("origin_x"), resultSet.getDouble("origin_y"), resultSet.getDouble("origin_z")));
+                    identities.add(new EntitySpawnIdentity(resultSet.getInt("id"), UUID.fromString(resultSet.getString("uuid")), resultSet.getInt("wid"), resultSet.getDouble("origin_x"), resultSet.getDouble("origin_y"), resultSet.getDouble("origin_z"), resultSet.getObject("block_rowid") != null));
                 }
             }
             return identities;
@@ -403,7 +412,7 @@ public final class EntitySpawnStatement {
             compositeRestore = connection.prepareStatement("UPDATE " + ConfigHandler.prefix + "entity_spawn SET data=NULL,removed=1 WHERE rowid=? AND kill_rowid=?");
             blockState = connection.prepareStatement("UPDATE " + ConfigHandler.prefix + "block SET rolled_back=? WHERE rowid=? AND action=?");
             exists = connection.prepareStatement("SELECT 1 FROM " + ConfigHandler.prefix + "entity_spawn WHERE uuid=? AND removed=0 LIMIT 1");
-            identity = connection.prepareStatement("SELECT rowid AS id,wid,origin_x,origin_y,origin_z FROM " + ConfigHandler.prefix + "entity_spawn WHERE uuid=? LIMIT 2");
+            identity = connection.prepareStatement("SELECT rowid AS id,wid,origin_x,origin_y,origin_z,block_rowid FROM " + ConfigHandler.prefix + "entity_spawn WHERE uuid=? LIMIT 2");
             trackingRowExists = connection.prepareStatement("SELECT 1 FROM " + ConfigHandler.prefix + "entity_spawn WHERE rowid=? LIMIT 1");
             trackingKillStateMatches = connection.prepareStatement("SELECT uuid,removed FROM " + ConfigHandler.prefix + "entity_spawn WHERE rowid=? AND kill_rowid=? LIMIT 1");
             blockStateMatches = connection.prepareStatement("SELECT 1 FROM " + ConfigHandler.prefix + "block WHERE rowid=? AND action=? AND rolled_back=? LIMIT 1");
@@ -672,10 +681,7 @@ public final class EntitySpawnStatement {
 
         private void setNullableData(PreparedStatement statement, int index, byte[] value) throws Exception {
             if (value == null) {
-                statement.setNull(index, databaseType.isDuckDB() ? Types.VARCHAR : Types.BLOB);
-            }
-            else if (databaseType.isDuckDB()) {
-                statement.setString(index, EntityDataCodec.toText(value));
+                statement.setNull(index, Types.BLOB);
             }
             else {
                 statement.setBytes(index, value);
@@ -695,7 +701,7 @@ public final class EntitySpawnStatement {
                 if (!resultSet.next()) {
                     return null;
                 }
-                EntitySpawnIdentity value = new EntitySpawnIdentity(resultSet.getInt("id"), uuid, resultSet.getInt("wid"), resultSet.getDouble("origin_x"), resultSet.getDouble("origin_y"), resultSet.getDouble("origin_z"));
+                EntitySpawnIdentity value = new EntitySpawnIdentity(resultSet.getInt("id"), uuid, resultSet.getInt("wid"), resultSet.getDouble("origin_x"), resultSet.getDouble("origin_y"), resultSet.getDouble("origin_z"), resultSet.getObject("block_rowid") != null);
                 if (resultSet.next()) {
                     throw new SQLException("Entity UUID resolves to multiple tracking rows: " + uuid);
                 }
@@ -732,6 +738,11 @@ public final class EntitySpawnStatement {
 
         public void afterCommit(boolean committed) {
             coordinator.afterCommit(committed);
+        }
+
+        @Override
+        public void afterRetain() {
+            coordinator.afterRetain();
         }
 
         public void afterDiscard() {

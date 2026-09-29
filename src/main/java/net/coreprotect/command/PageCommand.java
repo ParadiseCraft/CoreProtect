@@ -189,18 +189,22 @@ public class PageCommand {
             int z = Integer.parseInt(data[2]);
             int wid = Integer.parseInt(data[3]);
             int lookupType = Integer.parseInt(data[4]);
+            Integer entitySpawnRowId = type == 2 && data.length > 6 ? Integer.valueOf(data[6]) : null;
             if (defaultRe) {
                 re = Integer.parseInt(data[5]);
             }
 
             String bc = x + "." + y + "." + z + "." + wid + "." + lookupType + "." + re;
+            if (entitySpawnRowId != null) {
+                bc += "." + entitySpawnRowId;
+            }
             ConfigHandler.lookupCommand.put(player.getName(), bc);
 
             String world = WorldUtils.getWorldName(wid);
             final Block block = Bukkit.getServer().getWorld(world).getBlockAt(x, y, z);
             final BlockState blockState = block.getState();
 
-            Runnable runnable = new BlockLookupThread(player, command, block, blockState, page, re, type);
+            Runnable runnable = new BlockLookupThread(player, command, block, blockState, page, re, type, entitySpawnRowId);
             Thread thread = new Thread(runnable);
             thread.start();
         }

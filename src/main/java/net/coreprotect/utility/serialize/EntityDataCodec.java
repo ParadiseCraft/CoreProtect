@@ -1,14 +1,11 @@
 package net.coreprotect.utility.serialize;
 
-import java.nio.ByteBuffer;
-import java.nio.charset.CharacterCodingException;
-import java.nio.charset.CodingErrorAction;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -26,39 +23,97 @@ import org.bukkit.configuration.serialization.ConfigurationSerializable;
 import org.bukkit.configuration.serialization.ConfigurationSerialization;
 import org.bukkit.potion.PotionEffectType;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonArray;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParseException;
-import com.google.gson.JsonParser;
-import com.google.gson.JsonPrimitive;
-
 import net.coreprotect.bukkit.BukkitAdapter;
 
 public final class EntityDataCodec {
 
     public enum Kind {
-        ENTITY("entity", "CP2E:"),
-        ENTITY_SPAWN("entity_spawn", "CP2S:");
+        ENTITY("entity", 1),
+        ENTITY_SPAWN("entity_spawn", 2);
 
         private final String id;
-        private final String prefix;
-        private final byte[] prefixBytes;
+        private final int code;
 
-        Kind(String id, String prefix) {
+        Kind(String id, int code) {
             this.id = id;
-            this.prefix = prefix;
-            prefixBytes = prefix.getBytes(StandardCharsets.US_ASCII);
+            this.code = code;
+        }
+
+        private static Kind fromCode(int code) {
+            for (Kind kind : values()) {
+                if (kind.code == code) {
+                    return kind;
+                }
+            }
+            return null;
         }
     }
 
-    private static final int MAX_TEXT_LENGTH = 32 * 1024 * 1024;
-    private static final int MAX_DEPTH = 64;
+    private static final String DESCRIPTION = "Entity data";
+    private static final int MAGIC_FIRST = 'C';
+    private static final int MAGIC_SECOND = 'P';
+    private static final int VERSION = 1;
+    private static final int NULL = 0;
+    private static final int FALSE = 1;
+    private static final int TRUE = 2;
+    private static final int INTEGER = 3;
+    private static final int DOUBLE = 4;
+    private static final int STRING = 5;
+    private static final int LIST = 6;
+    private static final int MAP = 7;
+    private static final int BYTE = 8;
+    private static final int SHORT = 9;
+    private static final int LONG = 10;
+    private static final int FLOAT = 11;
+    private static final int SPECIAL_DOUBLE = 12;
+    private static final int UUID_VALUE = 13;
+    private static final int BYTE_ARRAY = 14;
+    private static final int INT_ARRAY = 15;
+    private static final int LONG_ARRAY = 16;
+    private static final int SET = 17;
+    private static final int ENUM = 18;
+    private static final int CONFIGURATION = 19;
+    private static final int DOUBLE_ZERO = 20;
+    private static final int DOUBLE_ONE = 21;
+    private static final int DOUBLE_INTEGER = 22;
+    private static final int DOUBLE_FLOAT = 23;
     private static final String BUKKIT_PACKAGE = "org.bukkit.";
     private static final String REMOVED_FOOD_EFFECT_ALIAS = "FoodEffect";
-    private static final Gson GSON = new GsonBuilder().disableHtmlEscaping().create();
+    private static final String[] STRING_DICTIONARY = {
+            "minecraft:random_spawn_bonus",
+            "minecraft:explosion_knockback_resistance",
+            "minecraft:water_movement_efficiency",
+            "minecraft:waypoint_transmit_range",
+            "minecraft:fall_damage_multiplier",
+            "minecraft:knockback_resistance",
+            "minecraft:movement_efficiency",
+            "minecraft:safe_fall_distance",
+            "operation",
+            "minecraft:attack_knockback",
+            "minecraft:armor_toughness",
+            "minecraft:camera_distance",
+            "minecraft:max_absorption",
+            "minecraft:movement_speed",
+            "minecraft:jump_strength",
+            "minecraft:burning_time",
+            "minecraft:follow_range",
+            "minecraft:oxygen_bonus",
+            "minecraft:attack_damage",
+            "minecraft:step_height",
+            "minecraft:max_health",
+            "minecraft:spawn_reinforcements",
+            "amount",
+            "minecraft:base_attack_damage",
+            "minecraft:gravity",
+            "minecraft:armor",
+            "minecraft:scale",
+            "minecraft:attacking",
+            "key",
+            "minecraft:zombie_random_spawn_bonus",
+            "minecraft:entity_interaction_range",
+            "minecraft:leader_zombie_bonus"
+    };
+    private static final Map<String, Integer> STRING_IDENTIFIERS = stringIdentifiers();
 
     private EntityDataCodec() {
         throw new IllegalStateException("Codec class");
@@ -68,20 +123,31 @@ public final class EntityDataCodec {
         Objects.requireNonNull(kind, "kind");
         Objects.requireNonNull(data, "data");
 
-        return fromText(kind.prefix + GSON.toJson(encodeValue(data, false, 1)));
+        BinaryOutput output = new BinaryOutput();
+        output.write(MAGIC_FIRST);
+        output.write(MAGIC_SECOND);
+        output.write(VERSION);
+        output.write(kind.code);
+        encodeValue(output, data, false, 1);
+        return output.toByteArray();
     }
 
     public static List<Object> decode(Kind expectedKind, byte[] encoded) {
+        return decode(expectedKind, encoded, true);
+    }
+
+    private static List<Object> decode(Kind expectedKind, byte[] encoded, boolean resolveConfigurations) {
         Objects.requireNonNull(expectedKind, "expectedKind");
+        Objects.requireNonNull(encoded, "encoded");
+        if (encoded.length > BinaryCodecSupport.MAX_ENCODED_LENGTH) {
+            throw new IllegalArgumentException("Entity data exceeds the maximum encoded size");
+        }
 
         try {
-            String text = toText(encoded);
-            Kind kind = encodedKind(text);
-            if (kind != expectedKind) {
-                throw new IllegalArgumentException("Entity data kind " + kind.id + " cannot be read as " + expectedKind.id);
-            }
-            JsonElement parsed = new JsonParser().parse(text.substring(kind.prefix.length()));
-            Object value = decodeValue(parsed, 1);
+            BinaryInput input = new BinaryInput(encoded, resolveConfigurations);
+            input.requireHeader(expectedKind);
+            Object value = input.readValue(1);
+            input.requireEnd();
             if (!(value instanceof List<?>)) {
                 throw new IllegalArgumentException("Entity data root is not a list");
             }
@@ -89,184 +155,170 @@ public final class EntityDataCodec {
             List<Object> data = (List<Object>) value;
             return data;
         }
-        catch (JsonParseException | StackOverflowError exception) {
-            throw new IllegalArgumentException("Invalid entity data", exception);
+        catch (StackOverflowError error) {
+            throw new IllegalArgumentException("Entity data exceeds the maximum nesting depth", error);
         }
     }
 
     public static byte[] canonicalize(Kind expectedKind, byte[] encoded) {
-        return encode(expectedKind, decode(expectedKind, encoded));
+        return encode(expectedKind, decode(expectedKind, encoded, false));
+    }
+
+    public static byte[] fromLegacy(Kind kind, byte[] serialized) throws IOException, ClassNotFoundException {
+        return encode(kind, LegacyMetadataCodec.decode(serialized));
+    }
+
+    public static byte[] toLegacy(Kind kind, byte[] encoded) throws IOException, ClassNotFoundException {
+        return LegacyMetadataCodec.encode(decode(kind, encoded, false));
     }
 
     public static boolean isEncoded(byte[] data) {
-        return encodedKind(data) != null;
+        return data != null && data.length >= 4
+                && Byte.toUnsignedInt(data[0]) == MAGIC_FIRST
+                && Byte.toUnsignedInt(data[1]) == MAGIC_SECOND
+                && Byte.toUnsignedInt(data[2]) == VERSION
+                && Kind.fromCode(Byte.toUnsignedInt(data[3])) != null;
     }
 
-    public static String toText(byte[] data) {
-        if (!isEncoded(data)) {
-            throw new IllegalArgumentException("Entity data does not use the CoreProtect text format");
-        }
-        if (data.length > MAX_TEXT_LENGTH) {
-            throw new IllegalArgumentException("Entity data exceeds the maximum encoded size");
-        }
-        try {
-            return StandardCharsets.UTF_8.newDecoder()
-                    .onMalformedInput(CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(CodingErrorAction.REPORT)
-                    .decode(ByteBuffer.wrap(data))
-                    .toString();
-        }
-        catch (CharacterCodingException exception) {
-            throw new IllegalArgumentException("Entity data is not valid UTF-8", exception);
-        }
-    }
-
-    public static byte[] fromText(String data) {
-        if (data == null) {
-            return null;
-        }
-        if (encodedKind(data) == null) {
-            throw new IllegalArgumentException("Entity data does not use the CoreProtect text format");
-        }
-        if (data.length() > MAX_TEXT_LENGTH) {
-            throw new IllegalArgumentException("Entity data exceeds the maximum encoded size");
-        }
-        validateUnicode(data);
-
-        byte[] encoded = data.getBytes(StandardCharsets.UTF_8);
-        if (encoded.length > MAX_TEXT_LENGTH) {
-            throw new IllegalArgumentException("Entity data exceeds the maximum encoded size");
-        }
-        return encoded;
-    }
-
-    private static Kind encodedKind(byte[] data) {
-        if (data == null) {
-            return null;
-        }
-        for (Kind kind : Kind.values()) {
-            if (startsWith(data, kind.prefixBytes)) {
-                return kind;
-            }
-        }
-        return null;
-    }
-
-    private static Kind encodedKind(String data) {
-        for (Kind kind : Kind.values()) {
-            if (data.startsWith(kind.prefix)) {
-                return kind;
-            }
-        }
-        return null;
-    }
-
-    private static boolean startsWith(byte[] data, byte[] prefix) {
-        if (data.length < prefix.length) {
-            return false;
-        }
-        for (int index = 0; index < prefix.length; index++) {
-            if (data[index] != prefix[index]) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static JsonElement encodeValue(Object value, boolean configurationValue, int depth) {
-        requireDepth(depth);
+    private static void encodeValue(BinaryOutput output, Object value, boolean configurationValue, int depth) {
+        BinaryCodecSupport.requireDepth(DESCRIPTION, depth);
         if (value == null) {
-            return com.google.gson.JsonNull.INSTANCE;
+            output.write(NULL);
         }
-        if (value instanceof Boolean) {
-            return new JsonPrimitive((Boolean) value);
+        else if (value instanceof Boolean) {
+            output.write((Boolean) value ? TRUE : FALSE);
         }
-        if (value instanceof String) {
-            validateUnicode((String) value);
-            return new JsonPrimitive((String) value);
+        else if (value instanceof String) {
+            output.write(STRING);
+            output.writeString((String) value);
         }
-        if (value instanceof Integer || value instanceof Double && Double.isFinite((Double) value)) {
-            return new JsonPrimitive((Number) value);
+        else if (value instanceof Integer) {
+            output.write(INTEGER);
+            output.writeZigZag((Integer) value);
         }
-        if (value instanceof Byte) {
-            return stringTag("b", value.toString());
+        else if (value instanceof Double) {
+            encodeDouble(output, (Double) value);
         }
-        if (value instanceof Short) {
-            return stringTag("h", value.toString());
+        else if (value instanceof Byte) {
+            output.write(BYTE);
+            output.write((Byte) value);
         }
-        if (value instanceof Long) {
-            return stringTag("l", value.toString());
+        else if (value instanceof Short) {
+            output.write(SHORT);
+            output.writeZigZag((Short) value);
         }
-        if (value instanceof Float) {
-            return stringTag("f", value.toString());
+        else if (value instanceof Long) {
+            output.write(LONG);
+            output.writeZigZag((Long) value);
         }
-        if (value instanceof Double) {
-            return stringTag("d", value.toString());
+        else if (value instanceof Float) {
+            output.write(FLOAT);
+            output.writeInt(Float.floatToIntBits((Float) value));
         }
-        if (value instanceof UUID) {
-            return stringTag("u", value.toString());
+        else if (value instanceof UUID) {
+            UUID uuid = (UUID) value;
+            output.write(UUID_VALUE);
+            output.writeLong(uuid.getMostSignificantBits());
+            output.writeLong(uuid.getLeastSignificantBits());
         }
-        if (value instanceof byte[]) {
-            return stringTag("a", Base64.getEncoder().withoutPadding().encodeToString((byte[]) value));
+        else if (value instanceof byte[]) {
+            byte[] bytes = (byte[]) value;
+            output.write(BYTE_ARRAY);
+            output.writeByteLength(bytes.length);
+            output.write(bytes, 0, bytes.length);
         }
-        if (value instanceof int[]) {
-            JsonArray values = new JsonArray();
-            for (int item : (int[]) value) {
-                values.add(item);
+        else if (value instanceof int[]) {
+            int[] values = (int[]) value;
+            output.write(INT_ARRAY);
+            output.writeLength(values.length);
+            for (int item : values) {
+                output.writeZigZag(item);
             }
-            return tag("i", values);
         }
-        if (value instanceof long[]) {
-            JsonArray values = new JsonArray();
-            for (long item : (long[]) value) {
-                values.add(Long.toString(item));
+        else if (value instanceof long[]) {
+            long[] values = (long[]) value;
+            output.write(LONG_ARRAY);
+            output.writeLength(values.length);
+            for (long item : values) {
+                output.writeZigZag(item);
             }
-            return tag("j", values);
         }
-        if (value instanceof NamespacedKey) {
-            return new JsonPrimitive(value.toString());
+        else if (value instanceof NamespacedKey) {
+            output.write(STRING);
+            output.writeString(value.toString());
         }
-        if (value instanceof ConfigurationSerializable) {
-            return encodeConfigurationValue((ConfigurationSerializable) value, depth);
+        else if (value instanceof LegacyMetadataCodec.ConfigurationValue) {
+            LegacyMetadataCodec.ConfigurationValue configuration = (LegacyMetadataCodec.ConfigurationValue) value;
+            output.write(CONFIGURATION);
+            output.writeString(configuration.alias());
+            encodeMapBody(output, configuration.values(), true, depth);
         }
-        if (value instanceof Keyed || value instanceof Sound || value instanceof PotionEffectType) {
-            return new JsonPrimitive(registryKey(value));
+        else if (value instanceof ConfigurationSerializable) {
+            encodeConfigurationValue(output, (ConfigurationSerializable) value, depth);
         }
-        if (value instanceof Enum<?>) {
-            return configurationValue ? encodeEnum((Enum<?>) value) : new JsonPrimitive(((Enum<?>) value).name());
+        else if (value instanceof Keyed || value instanceof Sound || value instanceof PotionEffectType) {
+            output.write(STRING);
+            output.writeString(registryKey(value));
         }
-        if (value instanceof Set<?>) {
-            List<JsonElement> values = new ArrayList<>();
-            for (Object item : (Set<?>) value) {
-                values.add(encodeValue(item, configurationValue, depth + 1));
+        else if (value instanceof LegacyMetadataCodec.RegistryValue) {
+            output.write(STRING);
+            output.writeString(((LegacyMetadataCodec.RegistryValue) value).key());
+        }
+        else if (value instanceof Enum<?>) {
+            encodeEnum(output, (Enum<?>) value, configurationValue);
+        }
+        else if (value instanceof Set<?>) {
+            encodeSet(output, (Set<?>) value, configurationValue, depth);
+        }
+        else if (value instanceof Collection<?>) {
+            Collection<?> values = (Collection<?>) value;
+            output.write(LIST);
+            output.writeLength(values.size());
+            for (Object item : values) {
+                encodeValue(output, item, configurationValue, depth + 1);
             }
-            values.sort(Comparator.comparing(GSON::toJson));
-            JsonArray array = new JsonArray();
-            String previous = null;
-            for (JsonElement item : values) {
-                String encoded = GSON.toJson(item);
-                if (encoded.equals(previous)) {
-                    throw new IllegalArgumentException("Entity data set contains duplicate encoded values");
-                }
-                array.add(item);
-                previous = encoded;
-            }
-            return tag("s", array);
         }
-        if (value instanceof Collection<?>) {
-            JsonArray values = new JsonArray();
-            for (Object item : (Collection<?>) value) {
-                values.add(encodeValue(item, configurationValue, depth + 1));
-            }
-            return values;
+        else if (value instanceof Map<?, ?>) {
+            output.write(MAP);
+            encodeMapBody(output, (Map<?, ?>) value, configurationValue, depth);
         }
-        if (value instanceof Map<?, ?>) {
-            return encodeMap((Map<?, ?>) value, configurationValue, depth);
+        else {
+            throw new IllegalArgumentException("Unsupported entity data value " + value.getClass().getName());
         }
-        throw new IllegalArgumentException("Unsupported entity data value " + value.getClass().getName());
     }
 
-    private static JsonElement encodeConfigurationValue(ConfigurationSerializable value, int depth) {
+    private static void encodeDouble(BinaryOutput output, double value) {
+        if (!Double.isFinite(value)) {
+            output.write(SPECIAL_DOUBLE);
+            output.write(Double.isNaN(value) ? 0 : value > 0 ? 1 : 2);
+            return;
+        }
+
+        switch (BinaryCodecSupport.compactDoubleType(value)) {
+            case ZERO:
+                output.write(DOUBLE_ZERO);
+                break;
+            case ONE:
+                output.write(DOUBLE_ONE);
+                break;
+            case INTEGER:
+                output.write(DOUBLE_INTEGER);
+                output.writeZigZag((long) value);
+                break;
+            case FLOAT:
+                output.write(DOUBLE_FLOAT);
+                output.writeInt(Float.floatToIntBits((float) value));
+                break;
+            case RAW:
+                output.write(DOUBLE);
+                output.writeLong(Double.doubleToLongBits(value));
+                break;
+            default:
+                throw new IllegalStateException("Unsupported compact double type");
+        }
+    }
+
+    private static void encodeConfigurationValue(BinaryOutput output, ConfigurationSerializable value, int depth) {
         Class<? extends ConfigurationSerializable> type = value.getClass();
         String alias = ConfigurationSerialization.getAlias(type);
         if (alias == null || alias.isEmpty()) {
@@ -278,274 +330,63 @@ public final class EntityDataCodec {
             throw new IllegalArgumentException("Configuration-serializable entity data value is null " + alias);
         }
 
-        JsonObject result = tag("c", encodeMap(serialized, true, depth + 1));
-        result.addProperty("c", alias);
-        return result;
+        output.write(CONFIGURATION);
+        output.writeString(alias);
+        encodeMapBody(output, serialized, true, depth);
     }
 
-    private static JsonElement encodeEnum(Enum<?> value) {
+    private static void encodeEnum(BinaryOutput output, Enum<?> value, boolean configurationValue) {
+        if (!configurationValue) {
+            output.write(STRING);
+            output.writeString(value.name());
+            return;
+        }
+
         Class<?> type = value.getDeclaringClass();
         if (!isBukkitApiType(type)) {
             throw new IllegalArgumentException("Disallowed entity data enum " + type.getName());
         }
-
-        JsonObject result = stringTag("e", value.name());
-        result.addProperty("c", type.getName().substring(BUKKIT_PACKAGE.length()));
-        return result;
+        output.write(ENUM);
+        output.writeString(type.getName().substring(BUKKIT_PACKAGE.length()));
+        output.writeString(value.name());
     }
 
-    private static JsonElement encodeMap(Map<?, ?> values, boolean configurationValue, int depth) {
+    private static void encodeSet(BinaryOutput output, Set<?> values, boolean configurationValue, int depth) {
+        List<byte[]> encodedValues = new ArrayList<>(values.size());
+        for (Object value : values) {
+            BinaryOutput item = new BinaryOutput();
+            encodeValue(item, value, configurationValue, depth + 1);
+            encodedValues.add(item.toByteArray());
+        }
+        encodedValues.sort(BinaryCodecSupport::compareBytes);
+        byte[] previous = null;
+        output.write(SET);
+        output.writeLength(encodedValues.size());
+        for (byte[] encoded : encodedValues) {
+            if (previous != null && BinaryCodecSupport.compareBytes(previous, encoded) == 0) {
+                throw new IllegalArgumentException("Entity data set contains duplicate encoded values");
+            }
+            output.write(encoded, 0, encoded.length);
+            previous = encoded;
+        }
+    }
+
+    private static void encodeMapBody(BinaryOutput output, Map<?, ?> values, boolean configurationValue, int depth) {
         Map<String, Object> sorted = new TreeMap<>();
         for (Map.Entry<?, ?> entry : values.entrySet()) {
             String key = mapKey(entry.getKey());
-            validateUnicode(key);
+            BinaryCodecSupport.validateUnicode(DESCRIPTION, key);
             if (sorted.containsKey(key)) {
                 throw new IllegalArgumentException("Duplicate entity data map key " + key);
             }
             sorted.put(key, entry.getValue());
         }
 
-        if (sorted.containsKey("$")) {
-            JsonArray entries = new JsonArray();
-            for (Map.Entry<String, Object> entry : sorted.entrySet()) {
-                JsonArray pair = new JsonArray();
-                pair.add(entry.getKey());
-                pair.add(encodeValue(entry.getValue(), configurationValue, depth + 1));
-                entries.add(pair);
-            }
-            return tag("m", entries);
-        }
-
-        JsonObject result = new JsonObject();
+        output.writeLength(sorted.size());
         for (Map.Entry<String, Object> entry : sorted.entrySet()) {
-            result.add(entry.getKey(), encodeValue(entry.getValue(), configurationValue, depth + 1));
+            output.writeString(entry.getKey());
+            encodeValue(output, entry.getValue(), configurationValue, depth + 1);
         }
-        return result;
-    }
-
-    private static JsonObject stringTag(String type, String value) {
-        validateUnicode(value);
-        return tag(type, new JsonPrimitive(value));
-    }
-
-    private static JsonObject tag(String type, JsonElement value) {
-        JsonObject result = new JsonObject();
-        result.addProperty("$", type);
-        result.add("v", value);
-        return result;
-    }
-
-    private static Object decodeValue(JsonElement value, int depth) {
-        if (depth > MAX_DEPTH * 4) {
-            throw new IllegalArgumentException("Entity data exceeds the maximum nesting depth");
-        }
-        if (value.isJsonNull()) {
-            return null;
-        }
-        if (value.isJsonPrimitive()) {
-            JsonPrimitive primitive = value.getAsJsonPrimitive();
-            if (primitive.isBoolean()) {
-                return primitive.getAsBoolean();
-            }
-            if (primitive.isString()) {
-                String result = primitive.getAsString();
-                validateUnicode(result);
-                return result;
-            }
-            return parseNumber(primitive.getAsString());
-        }
-        if (value.isJsonArray()) {
-            List<Object> result = new ArrayList<>();
-            for (JsonElement item : value.getAsJsonArray()) {
-                result.add(decodeValue(item, depth + 1));
-            }
-            return result;
-        }
-
-        Map<String, Object> result = new LinkedHashMap<>();
-        for (Map.Entry<String, JsonElement> entry : value.getAsJsonObject().entrySet()) {
-            validateUnicode(entry.getKey());
-            result.put(entry.getKey(), decodeValue(entry.getValue(), depth + 1));
-        }
-        return result.containsKey("$") ? decodeTag(result) : result;
-    }
-
-    private static Object decodeTag(Map<String, Object> values) {
-        String type = requireString(values, "$");
-        switch (type) {
-            case "b":
-            case "h":
-            case "l":
-            case "f":
-                requireFields(values, "$", "v");
-                return parseTaggedNumber(type, requireString(values, "v"));
-            case "d":
-                requireFields(values, "$", "v");
-                return parseSpecialDouble(requireString(values, "v"));
-            case "u":
-                requireFields(values, "$", "v");
-                return parseUuid(requireString(values, "v"));
-            case "a":
-                requireFields(values, "$", "v");
-                return parseByteArray(requireString(values, "v"));
-            case "i":
-                requireFields(values, "$", "v");
-                return parseIntArray(requireList(values, "v"));
-            case "j":
-                requireFields(values, "$", "v");
-                return parseLongArray(requireList(values, "v"));
-            case "s":
-                requireFields(values, "$", "v");
-                return parseSet(requireList(values, "v"));
-            case "m":
-                requireFields(values, "$", "v");
-                return parseEscapedMap(requireList(values, "v"));
-            case "e":
-                requireFields(values, "$", "c", "v");
-                return parseEnum(requireString(values, "c"), requireString(values, "v"));
-            case "c":
-                requireFields(values, "$", "c", "v");
-                return parseConfigurationValue(requireString(values, "c"), requireMap(values, "v"));
-            default:
-                throw new IllegalArgumentException("Unsupported entity data marker " + type);
-        }
-    }
-
-    private static Number parseNumber(String value) {
-        try {
-            if (value.indexOf('.') >= 0 || value.indexOf('e') >= 0 || value.indexOf('E') >= 0) {
-                double result = Double.parseDouble(value);
-                if (!Double.isFinite(result)) {
-                    throw new IllegalArgumentException("Invalid entity data number " + value);
-                }
-                return result;
-            }
-            return Integer.valueOf(value);
-        }
-        catch (NumberFormatException exception) {
-            throw new IllegalArgumentException("Invalid entity data number " + value, exception);
-        }
-    }
-
-    private static Number parseTaggedNumber(String type, String value) {
-        try {
-            Number result;
-            switch (type) {
-                case "b":
-                    result = Byte.valueOf(value);
-                    break;
-                case "h":
-                    result = Short.valueOf(value);
-                    break;
-                case "l":
-                    result = Long.valueOf(value);
-                    break;
-                default:
-                    result = Float.valueOf(value);
-                    break;
-            }
-            if (!result.toString().equals(value)) {
-                throw new IllegalArgumentException("Noncanonical entity data number " + value);
-            }
-            return result;
-        }
-        catch (NumberFormatException exception) {
-            throw new IllegalArgumentException("Invalid entity data number " + value, exception);
-        }
-    }
-
-    private static Double parseSpecialDouble(String value) {
-        switch (value) {
-            case "NaN":
-                return Double.NaN;
-            case "Infinity":
-                return Double.POSITIVE_INFINITY;
-            case "-Infinity":
-                return Double.NEGATIVE_INFINITY;
-            default:
-                throw new IllegalArgumentException("Invalid special double entity data value " + value);
-        }
-    }
-
-    private static UUID parseUuid(String value) {
-        try {
-            UUID uuid = UUID.fromString(value);
-            if (!uuid.toString().equals(value)) {
-                throw new IllegalArgumentException("Noncanonical UUID entity data value " + value);
-            }
-            return uuid;
-        }
-        catch (IllegalArgumentException exception) {
-            throw new IllegalArgumentException("Invalid UUID entity data value " + value, exception);
-        }
-    }
-
-    private static byte[] parseByteArray(String value) {
-        try {
-            byte[] bytes = Base64.getDecoder().decode(value);
-            if (!Base64.getEncoder().withoutPadding().encodeToString(bytes).equals(value)) {
-                throw new IllegalArgumentException("Noncanonical byte array entity data value");
-            }
-            return bytes;
-        }
-        catch (IllegalArgumentException exception) {
-            throw new IllegalArgumentException("Invalid byte array entity data value", exception);
-        }
-    }
-
-    private static int[] parseIntArray(List<Object> values) {
-        int[] result = new int[values.size()];
-        for (int index = 0; index < values.size(); index++) {
-            Object value = values.get(index);
-            if (!(value instanceof Integer)) {
-                throw new IllegalArgumentException("Invalid integer array entity data value");
-            }
-            result[index] = (Integer) value;
-        }
-        return result;
-    }
-
-    private static long[] parseLongArray(List<Object> values) {
-        long[] result = new long[values.size()];
-        for (int index = 0; index < values.size(); index++) {
-            try {
-                String value = requireString(values.get(index), "long array value");
-                result[index] = Long.parseLong(value);
-                if (!Long.toString(result[index]).equals(value)) {
-                    throw new IllegalArgumentException("Noncanonical long array entity data value");
-                }
-            }
-            catch (NumberFormatException exception) {
-                throw new IllegalArgumentException("Invalid long array entity data value", exception);
-            }
-        }
-        return result;
-    }
-
-    private static Set<Object> parseSet(List<Object> values) {
-        Set<Object> result = new LinkedHashSet<>();
-        for (Object value : values) {
-            if (!result.add(value)) {
-                throw new IllegalArgumentException("Duplicate entity data set value");
-            }
-        }
-        return result;
-    }
-
-    private static Map<String, Object> parseEscapedMap(List<Object> values) {
-        Map<String, Object> result = new LinkedHashMap<>();
-        for (Object value : values) {
-            if (!(value instanceof List<?>) || ((List<?>) value).size() != 2) {
-                throw new IllegalArgumentException("Invalid escaped entity data map entry");
-            }
-            List<?> entry = (List<?>) value;
-            String key = requireString(entry.get(0), "map key");
-            if (result.containsKey(key)) {
-                throw new IllegalArgumentException("Duplicate entity data map key " + key);
-            }
-            result.put(key, entry.get(1));
-        }
-        return result;
     }
 
     private static Object parseConfigurationValue(String alias, Map<String, Object> serialized) {
@@ -589,6 +430,9 @@ public final class EntityDataCodec {
     }
 
     private static String mapKey(Object value) {
+        if (value instanceof LegacyMetadataCodec.RegistryValue) {
+            return ((LegacyMetadataCodec.RegistryValue) value).key();
+        }
         if (value instanceof String || value instanceof NamespacedKey) {
             return value.toString();
         }
@@ -629,7 +473,7 @@ public final class EntityDataCodec {
 
     private static boolean isBukkitApiType(Class<?> type) {
         String name = type.getName();
-        return name.startsWith("org.bukkit.")
+        return name.startsWith(BUKKIT_PACKAGE)
                 && !name.startsWith("org.bukkit.craftbukkit.")
                 && type.getClassLoader() == ConfigurationSerializable.class.getClassLoader();
     }
@@ -654,65 +498,189 @@ public final class EntityDataCodec {
         return value;
     }
 
-    private static String requireString(Map<String, Object> values, String field) {
-        return requireString(values.get(field), field);
-    }
-
-    private static String requireString(Object value, String field) {
-        if (!(value instanceof String)) {
-            throw new IllegalArgumentException("Entity data field " + field + " is not a string");
-        }
-        return (String) value;
-    }
-
-    private static List<Object> requireList(Map<String, Object> values, String field) {
-        Object value = values.get(field);
-        if (!(value instanceof List<?>)) {
-            throw new IllegalArgumentException("Entity data field " + field + " is not a list");
-        }
-        @SuppressWarnings("unchecked")
-        List<Object> result = (List<Object>) value;
-        return result;
-    }
-
-    private static Map<String, Object> requireMap(Map<String, Object> values, String field) {
-        Object value = values.get(field);
-        if (!(value instanceof Map<?, ?>)) {
-            throw new IllegalArgumentException("Entity data field " + field + " is not a map");
-        }
-        @SuppressWarnings("unchecked")
-        Map<String, Object> result = (Map<String, Object>) value;
-        return result;
-    }
-
-    private static void requireFields(Map<String, Object> values, String... fields) {
-        if (values.size() != fields.length) {
-            throw new IllegalArgumentException("Invalid entity data marker fields");
-        }
-        for (String field : fields) {
-            if (!values.containsKey(field)) {
-                throw new IllegalArgumentException("Missing entity data marker field " + field);
+    private static Map<String, Integer> stringIdentifiers() {
+        Map<String, Integer> identifiers = new HashMap<>();
+        for (int index = 0; index < STRING_DICTIONARY.length; index++) {
+            if (identifiers.put(STRING_DICTIONARY[index], index) != null) {
+                throw new IllegalStateException("Duplicate entity data dictionary value " + STRING_DICTIONARY[index]);
             }
         }
+        return Collections.unmodifiableMap(identifiers);
     }
 
-    private static void validateUnicode(String value) {
-        for (int index = 0; index < value.length(); index++) {
-            char character = value.charAt(index);
-            if (Character.isHighSurrogate(character)) {
-                if (++index >= value.length() || !Character.isLowSurrogate(value.charAt(index))) {
-                    throw new IllegalArgumentException("Entity data contains an unpaired Unicode surrogate");
+    private static final class BinaryOutput extends BinaryCodecSupport.Output {
+
+        private BinaryOutput() {
+            super(DESCRIPTION);
+        }
+
+        private void writeString(String value) {
+            BinaryCodecSupport.validateUnicode(DESCRIPTION, value);
+            Integer identifier = STRING_IDENTIFIERS.get(value);
+            if (identifier != null) {
+                writeVarUnsigned(((long) identifier << 1) | 1);
+                return;
+            }
+            byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+            writeVarUnsigned(((long) bytes.length) << 1);
+            write(bytes, 0, bytes.length);
+        }
+    }
+
+    private static final class BinaryInput extends BinaryCodecSupport.Input {
+
+        private final boolean resolveConfigurations;
+
+        private BinaryInput(byte[] data, boolean resolveConfigurations) {
+            super(data, DESCRIPTION);
+            this.resolveConfigurations = resolveConfigurations;
+        }
+
+        private void requireHeader(Kind expectedKind) {
+            if (readUnsignedByte() != MAGIC_FIRST || readUnsignedByte() != MAGIC_SECOND) {
+                throw new IllegalArgumentException("Entity data does not use the CoreProtect binary format");
+            }
+            int version = readUnsignedByte();
+            if (version != VERSION) {
+                throw new IllegalArgumentException("Unsupported entity data format version " + version);
+            }
+            int kindCode = readUnsignedByte();
+            Kind kind = Kind.fromCode(kindCode);
+            if (kind == null) {
+                throw new IllegalArgumentException("Unsupported entity data kind " + kindCode);
+            }
+            if (kind != expectedKind) {
+                throw new IllegalArgumentException("Entity data kind " + kind.id + " cannot be read as " + expectedKind.id);
+            }
+        }
+
+        private Object readValue(int depth) {
+            BinaryCodecSupport.requireDepth(DESCRIPTION, depth);
+            int type = readUnsignedByte();
+            switch (type) {
+                case NULL:
+                    return null;
+                case FALSE:
+                    return false;
+                case TRUE:
+                    return true;
+                case INTEGER:
+                    return checkedInteger(readZigZag());
+                case DOUBLE:
+                    return readRawDouble();
+                case STRING:
+                    return readString();
+                case LIST:
+                    return readList(depth);
+                case MAP:
+                    return readMap(depth);
+                case BYTE:
+                    return (byte) readUnsignedByte();
+                case SHORT:
+                    return checkedShort(readZigZag());
+                case LONG:
+                    return readZigZag();
+                case FLOAT:
+                    return readFloat();
+                case SPECIAL_DOUBLE:
+                    return readSpecialDouble();
+                case UUID_VALUE:
+                    return new UUID(readLong(), readLong());
+                case BYTE_ARRAY:
+                    return readBytes(readByteLength());
+                case INT_ARRAY:
+                    return readIntArray();
+                case LONG_ARRAY:
+                    return readLongArray();
+                case SET:
+                    return readSet(depth);
+                case ENUM:
+                    return parseEnum(readString(), readString());
+                case CONFIGURATION:
+                    String alias = readString();
+                    Map<String, Object> serialized = readMapBody(depth);
+                    return resolveConfigurations ? parseConfigurationValue(alias, serialized)
+                            : new LegacyMetadataCodec.ConfigurationValue(alias, serialized);
+                case DOUBLE_ZERO:
+                    return 0.0D;
+                case DOUBLE_ONE:
+                    return 1.0D;
+                case DOUBLE_INTEGER:
+                    return readIntegralDouble();
+                case DOUBLE_FLOAT:
+                    return readFloatDouble();
+                default:
+                    throw new IllegalArgumentException("Unsupported entity data type " + type);
+            }
+        }
+
+        private List<Object> readList(int depth) {
+            int length = readLength("list");
+            List<Object> values = new ArrayList<>(Math.min(length, 1024));
+            for (int index = 0; index < length; index++) {
+                values.add(readValue(depth + 1));
+            }
+            return values;
+        }
+
+        private Map<String, Object> readMap(int depth) {
+            return readMapBody(depth);
+        }
+
+        private Map<String, Object> readMapBody(int depth) {
+            int length = readLength("map");
+            Map<String, Object> values = new LinkedHashMap<>(Math.min(length, 1024));
+            String previous = null;
+            for (int index = 0; index < length; index++) {
+                String key = readString();
+                if (previous != null && previous.compareTo(key) >= 0) {
+                    throw new IllegalArgumentException("Entity data map keys are not canonical");
                 }
+                values.put(key, readValue(depth + 1));
+                previous = key;
             }
-            else if (Character.isLowSurrogate(character)) {
-                throw new IllegalArgumentException("Entity data contains an unpaired Unicode surrogate");
-            }
+            return values;
         }
-    }
 
-    private static void requireDepth(int depth) {
-        if (depth > MAX_DEPTH) {
-            throw new IllegalArgumentException("Entity data exceeds the maximum nesting depth");
+        private Set<Object> readSet(int depth) {
+            int length = readLength("set");
+            Set<Object> values = new LinkedHashSet<>(Math.min(length, 1024));
+            byte[] previous = null;
+            for (int index = 0; index < length; index++) {
+                int start = position();
+                Object value = readValue(depth + 1);
+                byte[] encoded = bytesSince(start);
+                if (previous != null && BinaryCodecSupport.compareBytes(previous, encoded) >= 0) {
+                    throw new IllegalArgumentException("Entity data set values are not canonical");
+                }
+                values.add(value);
+                previous = encoded;
+            }
+            return values;
+        }
+
+        private String readString() {
+            long code = readVarUnsigned();
+            if (code < 0) {
+                throw new IllegalArgumentException("Entity data string identifier is out of range");
+            }
+            if ((code & 1) != 0) {
+                long identifier = code >>> 1;
+                if (identifier >= STRING_DICTIONARY.length) {
+                    throw new IllegalArgumentException("Unknown entity data string identifier " + identifier);
+                }
+                return STRING_DICTIONARY[(int) identifier];
+            }
+
+            long length = code >>> 1;
+            if (length > Integer.MAX_VALUE || length > remaining()) {
+                throw new IllegalArgumentException("Entity data string exceeds the remaining input");
+            }
+            String value = readUtf8((int) length);
+            if (STRING_IDENTIFIERS.containsKey(value)) {
+                throw new IllegalArgumentException("Entity data dictionary string is not canonical");
+            }
+            return value;
         }
     }
 }
