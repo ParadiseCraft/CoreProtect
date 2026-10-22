@@ -27,8 +27,10 @@ import net.coreprotect.consumer.Consumer;
 import net.coreprotect.consumer.Queue;
 import net.coreprotect.database.clickhouse.ClickHouseLookup;
 import net.coreprotect.database.statement.EntitySpawnStatement;
+import net.coreprotect.database.statement.SignStatement;
 import net.coreprotect.database.statement.UserStatement;
 import net.coreprotect.listener.channel.PluginChannelHandshakeListener;
+import net.coreprotect.model.SignState;
 import net.coreprotect.model.action.EntityActionFilter;
 import net.coreprotect.model.action.LookupActions;
 import net.coreprotect.model.action.SignActions;
@@ -37,9 +39,9 @@ import net.coreprotect.model.item.ItemTransactionActions;
 import net.coreprotect.model.lookup.EntityLookupContext;
 import net.coreprotect.model.lookup.LookupCursor;
 import net.coreprotect.model.lookup.LookupRollbackState;
+import net.coreprotect.model.rollback.SignRollbackChange;
 import net.coreprotect.utility.EntitySpawnTracking;
 import net.coreprotect.utility.EntityUtils;
-import net.coreprotect.utility.ErrorReporter;
 import net.coreprotect.utility.DatabaseUtils;
 import net.coreprotect.utility.MaterialUtils;
 import net.coreprotect.utility.WorldUtils;
@@ -98,11 +100,7 @@ public class LookupRaw extends Queue {
 
         boolean paused = false;
         try {
-            while (Consumer.isPaused && !Consumer.isPersistenceHalted()) {
-                Thread.sleep(1);
-            }
-            Consumer.isPaused = true;
-            paused = true;
+            paused = Consumer.claimLookupPause();
 
             Map<Integer, List<PageRow>> pageRows = new HashMap<>();
             long totalRows = Math.max(knownTotalRows, 0L);
@@ -151,12 +149,12 @@ public class LookupRaw extends Queue {
             return new RawLookupPage(totalRows, rows, nextCursor);
         }
         catch (Exception exception) {
-            ErrorReporter.report(exception);
+            Database.reportDatabaseFailure(exception);
             return new RawLookupPage(knownTotalRows > 0L ? knownTotalRows : 0L, Collections.emptyList(), null);
         }
         finally {
-            if (paused && !Consumer.isPersistenceHalted()) {
-                Consumer.isPaused = false;
+            if (paused) {
+                Consumer.releaseOperationPause();
             }
         }
     }
@@ -184,12 +182,8 @@ public class LookupRaw extends Queue {
         boolean paused = false;
         ResultSet results = null;
         try {
-            while (managePause && Consumer.isPaused && !Consumer.isPersistenceHalted()) {
-                Thread.sleep(1);
-            }
             if (managePause) {
-                Consumer.isPaused = true;
-                paused = true;
+                paused = Consumer.claimLookupPause();
             }
 
             if (ConfigHandler.databaseType.isClickHouse() && pageRows == null && limitOffset >= 0 && limitCount > 0) {
@@ -216,6 +210,8 @@ public class LookupRaw extends Queue {
                 return null;
             }
 
+            List<?> signIncludes = !lookup && actionList.contains(LookupActions.SIGN) ? List.copyOf(restrictList) : List.of();
+            List<?> signExcludes = !lookup && actionList.contains(LookupActions.SIGN) ? List.copyOf(excludeList.keySet()) : List.of();
             while (results.next()) {
                 if (actionList.contains(LookupActions.CHAT) || actionList.contains(LookupActions.COMMAND)) {
                     long resultId = results.getLong("id");
@@ -264,6 +260,11 @@ public class LookupRaw extends Queue {
                     int resultY = results.getInt("y");
                     int resultZ = results.getInt("z");
                     boolean isFront = results.getInt("face") == 0;
+                    if (!lookup) {
+                        SignRollbackChange change = new SignRollbackChange(SignState.read(results), isFront, signIncludes, signExcludes);
+                        list.add(new Object[] { resultId, resultTime, resultUserId, resultX, resultY, resultZ, 0, 0, LookupActions.SIGN, results.getInt("rolled_back"), resultWorldId, -1, null, null, change, 0 });
+                        continue;
+                    }
                     String line1 = results.getString("line_1");
                     String line2 = results.getString("line_2");
                     String line3 = results.getString("line_3");
@@ -372,9 +373,14 @@ public class LookupRaw extends Queue {
                     }
                 }
             }
+            if (!lookup && actionList.contains(LookupActions.SIGN)) {
+                results.close();
+                results = null;
+                SignStatement.loadRollbackStates(statement, list);
+            }
         }
         catch (Exception e) {
-            ErrorReporter.report(e);
+            Database.reportDatabaseFailure(e);
             return null;
         }
         finally {
@@ -383,11 +389,11 @@ public class LookupRaw extends Queue {
                     results.close();
                 }
                 catch (Exception e) {
-                    ErrorReporter.report(e);
+                    Database.reportDatabaseFailure(e);
                 }
             }
-            if (paused && !Consumer.isPersistenceHalted()) {
-                Consumer.isPaused = false;
+            if (paused) {
+                Consumer.releaseOperationPause();
             }
         }
         return list;
@@ -890,11 +896,11 @@ public class LookupRaw extends Queue {
                 queryBlock = queryBlock + " action NOT IN(-1) AND";
             }
 
-            if (includeBlock.length() > 0 || includeEntity.length() > 0) {
+            if ((lookup || !actionList.contains(LookupActions.SIGN)) && (includeBlock.length() > 0 || includeEntity.length() > 0)) {
                 queryBlock = queryBlock + " type IN(" + (includeBlock.length() > 0 ? includeBlock : "0") + ") AND";
             }
 
-            if (excludeBlock.length() > 0 || excludeEntity.length() > 0) {
+            if ((lookup || !actionList.contains(LookupActions.SIGN)) && (excludeBlock.length() > 0 || excludeEntity.length() > 0)) {
                 queryBlock = queryBlock + " type NOT IN(" + (excludeBlock.length() > 0 ? excludeBlock : "0") + ") AND";
             }
 
@@ -928,7 +934,12 @@ public class LookupRaw extends Queue {
             }
 
             if (actionList.contains(LookupActions.SIGN)) {
-                queryBlock = queryBlock + " action = " + SignActions.PLACE + " AND (LENGTH(line_1) > 0 OR LENGTH(line_2) > 0 OR LENGTH(line_3) > 0 OR LENGTH(line_4) > 0 OR LENGTH(line_5) > 0 OR LENGTH(line_6) > 0 OR LENGTH(line_7) > 0 OR LENGTH(line_8) > 0) AND";
+                if (lookup) {
+                    queryBlock = queryBlock + " action = " + SignActions.PLACE + " AND (LENGTH(line_1) > 0 OR LENGTH(line_2) > 0 OR LENGTH(line_3) > 0 OR LENGTH(line_4) > 0 OR LENGTH(line_5) > 0 OR LENGTH(line_6) > 0 OR LENGTH(line_7) > 0 OR LENGTH(line_8) > 0) AND";
+                }
+                else {
+                    queryBlock = queryBlock + " action IN(" + SignActions.PLACE + "," + SignActions.EDIT + ") AND";
+                }
             }
 
             if (queryBlock.length() > 0) {
@@ -1004,6 +1015,9 @@ public class LookupRaw extends Queue {
             else if (actionList.contains(LookupActions.SIGN)) {
                 queryTable = "sign";
                 rows = "rowid as id,time," + userColumn + ",wid,x,y,z,face,line_1,line_2,line_3,line_4,line_5,line_6,line_7,line_8";
+                if (!lookup) {
+                    rows += ",action,rolled_back,color,color_secondary,data,waxed";
+                }
             }
             else if (actionList.contains(LookupActions.ITEM)) {
                 queryTable = "item";
@@ -1264,7 +1278,7 @@ public class LookupRaw extends Queue {
             }
         }
         catch (Exception e) {
-            ErrorReporter.report(e);
+            Database.reportDatabaseFailure(e);
         }
 
         return results;
@@ -1550,11 +1564,12 @@ public class LookupRaw extends Queue {
         if (includePlaced && includeOther) {
             predicates.add("action=" + action);
         }
-        else if (includePlaced) {
-            predicates.add("(action=" + action + " AND type IN(" + placedEntityTypes + "))");
-        }
-        else if (includeOther) {
-            predicates.add("(action=" + action + " AND type NOT IN(" + placedEntityTypes + "))");
+        else if (includePlaced || includeOther) {
+            String negation = includePlaced ? "" : "NOT ";
+            String typePredicate = ConfigHandler.databaseType.isDuckDB()
+                    ? negation + "list_contains([" + placedEntityTypes + "],type)"
+                    : "type " + negation + "IN(" + placedEntityTypes + ")";
+            predicates.add("(action=" + action + " AND " + typePredicate + ")");
         }
     }
 
@@ -1655,16 +1670,18 @@ public class LookupRaw extends Queue {
             return baseQuery;
         }
 
-        if (ConfigHandler.databaseType.isDuckDB()) {
+        // Inline line predicates keep the outer restrictions usable. MySQL can still index merge the line prefix indexes when unrestricted.
+        if (ConfigHandler.databaseType.isDuckDB() || ConfigHandler.databaseType.isMySQL()) {
+            String match = ConfigHandler.databaseType.isDuckDB() ? " ILIKE ? ESCAPE '~'" : " LIKE ? ESCAPE '~'";
             StringBuilder query = new StringBuilder(baseQuery).append(" AND (");
             for (int filterIndex = 0; filterIndex < messageFilters.size(); filterIndex++) {
                 if (filterIndex > 0) {
                     query.append(" OR ");
                 }
                 query.append("((face=0 AND (");
-                appendDuckDBSignLines(query, 1, 4);
+                appendSignLines(query, 1, 4, match);
                 query.append(")) OR (face<>0 AND (");
-                appendDuckDBSignLines(query, 5, 8);
+                appendSignLines(query, 5, 8, match);
                 query.append(")))");
 
                 String filter = messageFilters.get(filterIndex) == null ? "" : messageFilters.get(filterIndex);
@@ -1741,12 +1758,12 @@ public class LookupRaw extends Queue {
         }
     }
 
-    private static void appendDuckDBSignLines(StringBuilder query, int firstLine, int lastLine) {
+    private static void appendSignLines(StringBuilder query, int firstLine, int lastLine, String match) {
         for (int line = firstLine; line <= lastLine; line++) {
             if (line > firstLine) {
                 query.append(" OR ");
             }
-            query.append("line_").append(line).append(" ILIKE ? ESCAPE '~'");
+            query.append("line_").append(line).append(match);
         }
     }
 
